@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N 20
+#define N 10
 
 __global__ void cuda_hello(){
     printf("Hello World from GPU!\n");
@@ -10,9 +10,7 @@ __global__ void cuda_hello(){
 void init_array(int *a, int n){
     for(int i=0; i < n; i++){
         a[i] = rand();
-        //printf("%d ", a[i]);
     }
-    //printf("\n");
 }
 
 void copy_array(int *a, int *b, int n){
@@ -32,12 +30,6 @@ void selection_sort(int *a, int n){
             }
         }
     }
-    /*
-    for(int i=0; i < n; i++){
-        printf("%d ", a[i]);
-    }
-    printf("\n");
-    */
 }
 
 void shell_sort(int *a, int n, int p){
@@ -52,7 +44,7 @@ void shell_sort(int *a, int n, int p){
                 a[i] = a[i-gap];
                 a[i-gap] = tmp;
                 // Sort previous terms
-                for(int j=i-gap; j-gap > 0 && a[j-gap] > a[j]; j=j-gap){
+                for(int j=i-gap; j-gap >= 0 && a[j-gap] > a[j]; j=j-gap){
                     tmp = a[j];
                     a[j] = a[j-gap];
                     a[j-gap] = tmp;
@@ -62,75 +54,141 @@ void shell_sort(int *a, int n, int p){
         clock_t stop = clock();
         printf("GAP %d time: %lf\n", gap, (double)(stop-start) / CLOCKS_PER_SEC);
     }
-    /*
-    for(int i=0; i < n; i++){
-        printf("%d ", a[i]);
-    }
-    printf("\n");
-    */
 }
 
-__global__ void sort(int *a, int n){
+
+__global__ void parallel_transposition_sort(int *a, int n){
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
 
+
+    // Create shared sub-vector
+    __shared__ int v[48/4 * 1024];
+
+    // Place sub-array into shared memory
     if(idx < n){
-        for(int step=0; step < blockDim.x; step++){
-            if(step % 2 == 0 && idx % 2 == 0 && threadIdx.x < blockDim.x - 1){
-                if(a[idx] > a[idx+1]){
-                    int tmp = a[idx+1];
-                    a[idx+1] = a[idx];
-                    a[idx] = tmp;
+        v[threadIdx.x] = a[idx];
+    }
+
+    int tmp;
+    int phase = 0;
+    if(threadIdx.x < blockDim.x-1 && idx < n-1){
+        for(int i=0; i < blockDim.x; i++){
+            if(threadIdx.x % 2 == phase % 2){
+                if(v[threadIdx.x] > v[threadIdx.x+1]){
+                    tmp = v[threadIdx.x];
+                    v[threadIdx.x] = v[threadIdx.x+1];
+                    v[threadIdx.x+1] = tmp;
                 }
             }
-            if(step % 2 == 1 && idx % 2 == 1 && threadIdx.x < blockDim.x - 1){
-                if(a[idx] > a[idx+1]){
-                    int tmp = a[idx+1];
-                    a[idx+1] = a[idx];
-                    a[idx] = tmp;
-                }
-            }
-            __syncthreads(); 
-        }   
+            phase = 1-phase;
+            __syncthreads();        
+        }
+    }
+    if(blockIdx.x == 0 && threadIdx.x == 0){
+        printf("\n");
+    }
+    if(blockIdx.x == 0){
+        printf("%d ", v[threadIdx.x]);
     }
 
 
+    if(idx < n){
+        a[idx] = v[threadIdx.x];
+    }
 }
 
 
-int main(){
+__global__ void parallel_shell_sort(int *a, int n, int elems_per_block){
 
-    int *a, *seq, *par;
-    int *d_a, *d_seq, *d_par;
-    const size_t size = N * sizeof(int);
+    // Create shared sub-vector
+    __shared__ int v[12 * 1024];
+
+    // Place sub-array into shared memory
+    if(threadIdx.x == 0){
+        for(int i=blockIdx.x*elems_per_block; i < n && i < (blockIdx.x+1)*elems_per_block; i++){
+            v[i-blockIdx.x*elems_per_block] = a[i];
+        }
+    }
+
+    //SHELL SORT!!!
+}
+
+
+void sort(int *a, int n){
+    int *d_a;
+    int size = n * sizeof(int);
 
     /* Allocate space for device copies of a, b, c */
     cudaMalloc((void **)&d_a, size);
-    cudaMalloc((void **)&d_seq, size);
-    cudaMalloc((void **)&d_par, size);
-    
-    /* Alloc space for host copies of a,b,c and setup input values */
-    a = (int *)malloc(size);
-    seq = (int *)malloc(size);
-    par = (int *)malloc(size);
-
-    // Init Array
-    for(int i=0; i < N; i++){
-        a[i] = rand() % 100;
-        printf("%d ", a[i]);
-    }
-    printf("\n\n");
 
     /* Copy inputs to device */
     cudaMemcpy(d_a, a, size, cudaMemcpyHostToDevice);
 
-    /* Launch sort() kernel on GPU */
-    sort<<<2,N/2>>>(d_a, N);
+    int blocks = (n + (12 * 1024) - 1) / (12 * 1024);
+    int elems_per_block;
+
+    while(true){
+        elems_per_block = (n + blocks - 1) / blocks;
+        if(elems_per_block > 1024){
+            /* Launch sort() kernel on GPU */
+            parallel_shell_sort<<<blocks, 1024>>>(d_a, n, elems_per_block);
+        } else {
+            /* Launch sort() kernel on GPU */
+            parallel_transposition_sort<<<blocks, elems_per_block>>>(d_a, n);
+        }
+
+        if(blocks == 1) break;
+        blocks = blocks / 2;
+    }
+
+
+
+
+
+
+
 
     cudaMemcpy(a, d_a, size, cudaMemcpyDeviceToHost);
+}
 
+
+
+
+int main(){
+
+    int *a;
+    const size_t size = N * sizeof(int);
+
+    /* Allocate space for device copies of a, b, c */
+    //cudaMalloc((void **)&d_a, size);
+    
+    /* Alloc space for host copies of a,b,c and setup input values */
+    a = (int *)malloc(size);
+
+    // Init Array
+    for(int i=0; i < N; i++){
+        a[i] = rand() % 10000;
+        printf("%d ", a[i]);
+    }
+    printf("\n");
+
+    sort(a, N);
+
+    /*
+    // Copy inputs to device
+    cudaMemcpy(d_a, a, size, cudaMemcpyHostToDevice);
+
+    // Launch sort() kernel on GPU
+    parallel_shell_sort<<<4, 5>>>(d_a, N);
+
+    cudaMemcpy(a, d_a, size, cudaMemcpyDeviceToHost);
+    */
+
+    printf("\n");
     for(int i=0; i < N; i++){
         printf("%d ", a[i]);
     }
+    printf("\n");
 
 }
 
