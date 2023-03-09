@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N 1024*12*1024
+#define N 5*12*1024
 
 void copy_array(int *a, int *b, int n){
     for(int i=0; i < n; i++){
@@ -108,7 +108,6 @@ void sort_seq(int *a, int n){
 }
 
 __global__ void parallel_shell_sort(int *a, int n, int elems_per_block){
-    int blocks = (n + elems_per_block - 1) / elems_per_block;
 
     //Block offset
     int off = blockIdx.x*elems_per_block;
@@ -133,7 +132,7 @@ __global__ void parallel_shell_sort(int *a, int n, int elems_per_block){
         int tmp;
         for(int gap=1024; gap > 0; gap /= 2){
             if(threadIdx.x < gap){
-                for(int i=gap+threadIdx.x; i < elems_per_block; i=i+gap){
+                for(int i=gap+threadIdx.x; i < elems_per_block && i < n; i=i+gap){
                     if(v[i-gap] > v[i]){
                         tmp = v[i];
                         v[i] = v[i-gap];
