@@ -2,7 +2,7 @@
 #include <math.h>
 #include <time.h>
 
-#define N 128*8*1024
+#define N 10
 
 __global__ void sort(int *a, int n, int k, int j, int blocks){
     int elems_block = (n + blocks - 1) / blocks;
@@ -123,7 +123,7 @@ int main(){
 
     printf("\n");
     for(int i = 0; i < n; i++){
-        //printf("%d ", aux[i]);
+        printf("%d ", aux[i]);
     }
         
 }
