@@ -2,13 +2,14 @@
 #include <math.h>
 #include <time.h>
 
-#define N 512*1024*1024
+#define N 128*8*1024
 
 __global__ void sort(int *a, int n, int k, int j, int blocks){
-    int elems_block = n / blocks;
+    int elems_block = (n + blocks - 1) / blocks;
     int off = blockIdx.x * elems_block;
 
     if(elems_block < 8 *1024 && k <= elems_block){
+
         // Shared memory
         __shared__ int v[8 * 1024];
 
@@ -40,6 +41,7 @@ __global__ void sort(int *a, int n, int k, int j, int blocks){
         }    
 
     } else {
+
         // Global memory
         // One step of bitonic sort
         int l;
@@ -71,6 +73,7 @@ void bitonic(int *a, int n, int blocks, int threads){
     
     for(int k=2; k <= n; k*=2){
         for(int j=k/2; j > 0; j/=2){
+            //printf("\n%d %d\n", k, j);
             sort<<<blocks, threads>>>(d_a, n, k, j, blocks);
             cudaDeviceSynchronize();
         }
@@ -114,13 +117,13 @@ int main(){
     printf("\nStarted...\n");
     clock_t start = clock();
     //bitonic_seq(aux, n); 
-    bitonic(aux, n, 1024, 1024);
+    bitonic(aux, n, 128, 1024);
     clock_t stop = clock();
     printf("Finished sorting in %lf seconds\n", (double)(stop-start) / CLOCKS_PER_SEC);
 
     printf("\n");
-    //for(int i = 0; i < n; i++){
-    //    printf("%d ", aux[i]);
-    //}
+    for(int i = 0; i < n; i++){
+        //printf("%d ", aux[i]);
+    }
         
 }
