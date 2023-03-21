@@ -11,7 +11,7 @@ void random_array(int *a, int n){
 /*
     Randomly initialize the elements of an array given its size.
 */
-    for(int i=0; i < N; i++){
+    for(int i=0; i < n; i++){
         a[i] = rand();
     }
 }
@@ -339,18 +339,16 @@ bool test(int *a, int *b, int n){
     start = clock();
     bitonic_seq(a, n);
     stop = clock();
-    time_seq = (double)(stop-start) / CLOCKS_PER_SEC;
-    thr_seq = (double) (n * ((double)(CLOCKS_PER_SEC) / (stop-start)));
+    time_seq = double(stop-start+1) / double(CLOCKS_PER_SEC);
+    thr_seq = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
     
     /* PARALLEL BITONIC SORT */
     start = clock();
-
     int blocks = int(floor((double)(n + (double)(MAX_SHARED_ELEMS) - 1) / (double)(MAX_SHARED_ELEMS)));
     bitonic(b, n, blocks, 1024);
-
     stop = clock();
-    time_par = (double)(stop-start) / CLOCKS_PER_SEC;
-    thr_par = (double) (n * ((double)(CLOCKS_PER_SEC) / (stop-start)));
+    time_par = double(stop-start+1) / double(CLOCKS_PER_SEC);
+    thr_par = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
 
     printf("Sequential time:\t%lf seconds\t", time_seq);
     printf("Throughput:\t%lf\n", thr_seq);
@@ -368,12 +366,11 @@ bool test(int *a, int *b, int n){
 int main(){
 
     int *a, *b;
-    const size_t size = N * sizeof(int);
 
     for(int length=1024; length < MAX_LENGTH; length*=2){
         // Allocate memory for the array
-        a = (int *)malloc(size);
-        b = (int *)malloc(size);
+        a = (int *)malloc(length * sizeof(int));
+        b = (int *)malloc(length * sizeof(int));
 
         // Initialize random array
         random_array(a, length);
