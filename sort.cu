@@ -3,7 +3,7 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 8*1024
-#define N 256*1024*1024
+#define N 128*1024*1024
 #define MAX_LENGTH 256*1024*1024
 
 
@@ -267,7 +267,7 @@ void bitonic(int *a, int n, int blocks, int threads){
     int m = (int)pow(2, ceil(log2(n)));
     const size_t size = m * sizeof(int);
 
-    // Instantiate an auxiliary array with a number of elements which is a number of two 
+    // Instantiate an auxiliary array with a number of elements which is a power of two 
     int *aux, *d_aux;
     aux = (int *)malloc(size);              // Allocate space in HOST memory
     cudaMalloc((void **)&d_aux, size);      // Allocate space in DEVICE memory

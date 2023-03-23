@@ -3,11 +3,12 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 12*1024
-#define N 4*1024*1024
-#define MAX_LENGTH 128*1024*1024
+#define MAX_LENGTH 32*1024*1024
+#define MAX_LENGTH_SEQ 1*1024*1024
+#define REPETITIONS 5
 
 
-void random_array(int *a, int n){
+void randomArray(int *a, int n){
 /*
     Randomly initialize the elements of an array given its size.
 */
@@ -18,7 +19,7 @@ void random_array(int *a, int n){
 }
 
 
-void copy_array(int *a, int *b, int n){
+void copyArray(int *a, int *b, int n){
     for(int i=0; i < n; i++){
         b[i] = a[i];
     }
@@ -34,9 +35,19 @@ __global__ void copyArrayDevice(int *dst, int *src, int n, int blocks){
 }
 
 
-bool compare_arrays(int *a, int *b, int n){
+bool compareArrays(int *a, int *b, int n){
     for(int i=0; i < n; i++){
         if(a[i] != b[i]){
+            return false;
+        }
+    }
+    return true;
+}
+
+
+bool everIncreasing(int *a, int n){
+    for(int i=1; i < n; i++){
+        if(a[i] < a[i-1]){
             return false;
         }
     }
@@ -78,7 +89,7 @@ __host__ __device__ int binarySearchCount(int val, int *a, int first, int last, 
 }
 
 
-__global__ void merge_in_mem(int *a, int n, int blocks){
+__global__ void mergeInMem(int *a, int n, int blocks){
     int elems_block = (n + blocks - 1) / blocks; 
     
     // Block offset
@@ -99,7 +110,8 @@ __global__ void merge_in_mem(int *a, int n, int blocks){
             int before = i%size + (i/(2*size)) * 2 * size;
             int ord = (i/size) % 2;
             int first = (i/size + 1 - 2*ord) * size;
-            int last = min(first + size, n - off);
+            int last = min(first + size, elems_block);
+            last = min(last, n - off);
             if(last > first){
                 int idx = binarySearchCount(v[i], v, first, last, ord);
                 aux[idx + before] = v[i]; 
@@ -120,7 +132,7 @@ __global__ void merge_in_mem(int *a, int n, int blocks){
 }
 
 
-__global__ void merge_out_mem(int *a, int *aux, int n, int size, int blocks){
+__global__ void mergeOffMem(int *a, int *aux, int n, int size, int blocks){
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     int threads = blocks * blockDim.x;
 
@@ -132,16 +144,14 @@ __global__ void merge_out_mem(int *a, int *aux, int n, int size, int blocks){
         if(last > first){
             int idx = binarySearchCount(a[i], a, first, last, ord);
             aux[idx + before] = a[i];
-            //printf("\n%d\t%d -> %d (%d + %d)\t%d %d (%d)\n", a[i], i, idx + before, idx, before, first, last, ord);
         } else {
             aux[before] = a[i];
-            //printf("\n%d\t%d -> %d\t%d %d (%d)\n", a[i], before, first, last, ord);
         }
     }
 }
 
 
-void mergeSort(int *a, int n){
+void mergeSortSeq(int *a, int n){
     int *aux = (int *)malloc(n * sizeof(int));
     for(int size=1; size < n; size*=2){
         for(int i=0; i < n; i++){
@@ -156,24 +166,18 @@ void mergeSort(int *a, int n){
                 aux[before] = a[i];
             }
         }
-        copy_array(aux, a, n);
+        copyArray(aux, a, n);
     }
-    printf("\n");
-	for(int i=0; i < n; i++){
-		//printf("%d ", a[i]);
-	}
-	printf("\n");
 }
 
 
-void shellSortPar(int *a, int n){
+void mergeSortPar(int *a, int n){
 /*
 */
 
-    // Instantiate an auxiliary array with a number of elements which is a number of two 
     int *d_a, *d_aux;
 	const size_t size = n * sizeof(int);
-    clock_t start, stop;
+    
     cudaMalloc((void **)&d_a, size);      // Allocate space in DEVICE memory
     cudaMalloc((void **)&d_aux, size);    // Allocate space in DEVICE memory
 
@@ -184,77 +188,90 @@ void shellSortPar(int *a, int n){
     int threads = 1024;
     int elems_block = (n + blocks - 1) / blocks;
     
-    //merge_in_mem<<<blocks, threads>>>(d_a, n, blocks);
-    cudaDeviceSynchronize();
-    for(int size=1; size < n; size*=2){
-        merge_out_mem<<<blocks, threads>>>(d_a, d_aux, n, size, blocks);
-        cudaDeviceSynchronize();
-        cudaMemcpy(d_a, d_aux, size, cudaMemcpyDeviceToDevice);
+    // Initial merging steps using the SHARED memory
+    mergeInMem<<<blocks, threads>>>(d_a, n, blocks);
+    cudaDeviceSynchronize(); // Wait for all the blocks
+    for(int size=elems_block; size < n; size*=2){
+        
+        // Continue merging using the GLOBAL memory
+        mergeOffMem<<<blocks, threads>>>(d_a, d_aux, n, size, blocks);
+        cudaDeviceSynchronize(); // Wait for all the blocks
+
+        // Copy data from the auxiliary array to the original one
         copyArrayDevice<<<blocks, threads>>>(d_a, d_aux, n, blocks);
-        cudaDeviceSynchronize();
+        cudaDeviceSynchronize(); // Wait for all the blocks
     }
    
     // Copy the results from the array in the DEVICE to the one in the HOST memory
     cudaMemcpy(a, d_a, size, cudaMemcpyDeviceToHost);
-    
 
-	printf("\n");
-	for(int i=0; i < n; i++){
-		//printf("%d ", a[i]);
-	}
-	printf("\n");
-
-    cudaFree(d_a);
+    // Free DEVICE memory
+    cudaFree(d_a); cudaFree(d_aux);
 }
 
-bool test(int *a, int *b, int n){
-    clock_t start, stop;
-    double time_seq, time_par, thr_seq, thr_par;
 
-    printf("\nnum elements: %d\n", n);
-    /* SEQUENTIAL BITONIC SORT */
-    start = clock();
-    //mergeSort(a, n);
-    stop = clock();
-    time_seq = double(stop-start+1) / double(CLOCKS_PER_SEC);
-    thr_seq = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
-    
-    /* PARALLEL BITONIC SORT */
-    start = clock();
-    int blocks = int(floor((double)(n + (double)(MAX_SHARED_ELEMS / 2) - 1) / (double)(MAX_SHARED_ELEMS / 2)));
-    shellSortPar(b, n);
-    stop = clock();
-    time_par = double(stop-start+1) / double(CLOCKS_PER_SEC);
-    thr_par = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
-
-    printf("Sequential time:\t%lf seconds\t", time_seq);
-    printf("Throughput:\t%lf\n", thr_seq);
-    printf("  Parallel time:\t%lf seconds\t", time_par);
-    printf("Throughput:\t%lf\t(%d)\t", thr_par, blocks);
-    if(compare_arrays(a, b, n)){
-        printf("[OK]\n");
-        return true;
-    } else {
-        printf("[WRONG]\n");
-        return false;
+void printResults(double *time, double *thr, int n){
+    for(int r=0; r < n; r++){
+        printf("%.4f\t", time[r]);
     }
+    printf("(s)\n");
+    for(int r=0; r < n; r++){
+        printf("%.0f\t", thr[r]);
+    }
+    printf("(elements / s)\n\n");
 }
+
 
 int main(){
 
     int *a, *b;
+    clock_t start, stop;
+    double timeS[REPETITIONS], timeP[REPETITIONS];
+    double thrS[REPETITIONS], thrP[REPETITIONS];
 
-    for(int length=MAX_LENGTH; length <= MAX_LENGTH; length*=2){
-        // Allocate memory for the array
-        a = (int *)malloc(length * sizeof(int));
-        b = (int *)malloc(length * sizeof(int));
+    for(int length=1024; length <= MAX_LENGTH; length*=2){
+        printf("N = %d\n", length);
+        for(int r=0; r < REPETITIONS; r++){
+            
+            // Allocate memory for the array
+            a = (int *)malloc(length * sizeof(int));
+            b = (int *)malloc(length * sizeof(int));
 
-        // Initialize random array
-        random_array(a, length);
-        copy_array(a, b, length);
+            // Initialize random array
+            randomArray(a, length);
+            copyArray(a, b, length);
 
-        test(a, b, length);
-		//break;
-        free(a); free(b);
+            if(length <= MAX_LENGTH_SEQ){
+                // SEQUENTIAL algorithm
+                start = clock();
+                mergeSortSeq(a, length);
+                stop = clock();
+            }
+
+            timeS[r] = double(stop-start+1) / double(CLOCKS_PER_SEC);
+            thrS[r] = double(length * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
+
+            // PARALLEL algorithm
+            start = clock();
+            mergeSortPar(b, length);
+            stop = clock();
+
+            timeP[r] = double(stop-start+1) / double(CLOCKS_PER_SEC);
+            thrP[r] = double(length * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
+
+            // Check correctness
+            if((length <= MAX_LENGTH_SEQ && compareArrays(a, b, length) != true) ||
+                    length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true){
+                printf("\nERROR!!\n");
+            }
+
+            free(a); free(b);
+        }
+        if(length <= MAX_LENGTH_SEQ){
+            printf("SEQ\n");
+            printResults(timeS, thrS, REPETITIONS);
+        }
+        printf("PAR\n");
+        printResults(timeP, thrP, REPETITIONS);
     }
 }
