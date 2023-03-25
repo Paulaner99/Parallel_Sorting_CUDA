@@ -3,11 +3,13 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 8*1024
-#define N 128*1024*1024
-#define MAX_LENGTH 256*1024*1024
+#define MAX_LENGTH 32*1024*1024
+#define MAX_LENGTH_SEQ 1*1024*1024
+#define REPETITIONS 5
 
 
-void random_array(int *a, int n){
+// UTILS
+void randomArray(int *a, int n){
 /*
     Randomly initialize the elements of an array given its size.
 */
@@ -17,14 +19,14 @@ void random_array(int *a, int n){
 }
 
 
-void copy_array(int *a, int *b, int n){
+void copyArray(int *a, int *b, int n){
     for(int i=0; i < n; i++){
         b[i] = a[i];
     }
 }
 
 
-bool compare_arrays(int *a, int *b, int n){
+bool compareArrays(int *a, int *b, int n){
     for(int i=0; i < n; i++){
         if(a[i] != b[i]){
             return false;
@@ -34,7 +36,7 @@ bool compare_arrays(int *a, int *b, int n){
 }
 
 
-void compare_swap(int *a, int i, int j, int dir){
+void compareAndSwap(int *a, int i, int j, int dir){
     if(dir == (a[i] > a[j])){
         int tmp = a[i];
         a[i] = a[j];
@@ -43,35 +45,56 @@ void compare_swap(int *a, int i, int j, int dir){
 }
 
 
-void bitonic_merge(int *a, int low, int k, int dir){
-    if(k > 1){
-        int j = k/2;
-        for(int i=low; i < low + j; i++){
-            compare_swap(a, i, i+j, dir);
+bool everIncreasing(int *a, int n){
+    for(int i=1; i < n; i++){
+        if(a[i] < a[i-1]){
+            return false;
         }
-        bitonic_merge(a, low, j, dir);
-        bitonic_merge(a, low+j, j, dir);
+    }
+    return true;
+}
+
+
+void printResults(double *time, double *thr, int n){
+    for(int r=0; r < n; r++){
+        printf("%.4f    ", time[r]);
+    }
+    printf("(s)\n");
+    for(int r=0; r < n; r++){
+        printf("%.0f    ", thr[r]);
+    }
+    printf("(el/s)\n\n");
+}
+
+
+// SEQUENTIAL VERSION
+void bitonicSort(int *a, int n){
+    // Steps
+    for(int k=2; k <= n; k*=2){
+
+        // Stages
+        for(int j=k/2; j > 0; j/=2){
+            int l, tmp;
+
+            // Elements
+            for(int i=0; i < n; i++){
+                l = i ^ j;
+                if(l > i){
+                    // COMPARE
+                    if((i & k) == 0 && (a[i] > a[l]) || (i & k) != 0 && (a[i] < a[l])){
+                        // SWAP
+                        tmp = a[i];
+                        a[i] = a[l];
+                        a[l] = tmp;
+                    }
+                }
+            }
+        }
     }
 }
 
 
-void bitonic_sort(int *a,int low, int k, int dir){
-    if(k > 1){
-        int j = k/2;
- 
-        // Sort in ascending order (dir=1)
-        bitonic_sort(a, low, j, 1);
- 
-        // Sort in descending order (dir=0)
-        bitonic_sort(a, low+j, j, 0);
- 
-        // Merge whole sequence in ascending order (dir=1)
-        bitonic_merge(a,low, k, dir);
-    }
-}
-
-
-void bitonic_seq(int *a, int n){
+void bitonicSortSeq(int *a, int n){
     // Compute the nearest power of two >= n
     int m = (int)pow(2, ceil(log2(n)));
     const size_t size = m * sizeof(int);
@@ -89,14 +112,13 @@ void bitonic_seq(int *a, int n){
         }
     }
     
-    bitonic_sort(aux, 0, m, 1);
+    bitonicSort(aux, m);
 
     int i = 0;
     int j = 0;
     while(i < m){
         if(aux[i] != -1){
             a[j] = aux[i];
-            //printf("%d ", a[j]);
             j++;
         }
         i++;
@@ -105,7 +127,8 @@ void bitonic_seq(int *a, int n){
 }
 
 
-__global__ void sort_in_mem(int *a, int n, int k, int j, int elems_block){
+// PARALLEL VERSION
+__global__ void bitonicInMem(int *a, int n, int k, int j, int elems_block){
 /*
     Performs multiple steps of bitonic sort within the same box 'k'. 
     In particular, it computes log_2(j) steps (i.e., up to j=1, with j halved at each step).
@@ -162,7 +185,7 @@ __global__ void sort_in_mem(int *a, int n, int k, int j, int elems_block){
 }
 
 
-__global__ void sort_out_mem(int *a, int n, int k, int j, int elems_block){
+__global__ void bitonicOffMem(int *a, int n, int k, int j, int elems_block){
 /*
     Performs one step of bitonic sort. 
     In particular, it computes step (k, j).
@@ -174,27 +197,29 @@ __global__ void sort_out_mem(int *a, int n, int k, int j, int elems_block){
     int off = blockIdx.x * elems_block;
 
     // One step of bitonic sort
-    int l, i, tmp;
+    int l, i;
+    int el_i, el_l;
 
     // Each thread evaluates comparisons and swaps until all elements are re-ordered. 
     // (according to the pattern required at step (k, j))
     for(int idx=threadIdx.x; (idx < elems_block) && (idx + off < n); idx+=blockDim.x){
         i = idx + off;
         l = i ^ j;
+        el_i = a[i];
+        el_l = a[l];
         if(l > i){
             // COMPARE
-            if((i & k) == 0 && (a[i] > a[l]) || (i & k) != 0 && (a[i] < a[l])){
+            if((i & k) == 0 && (el_i > el_l) || (i & k) != 0 && (el_i < el_l)){
                 // SWAP
-                tmp = a[i];
-                a[i] = a[l];
-                a[l] = tmp;
+                a[i] = el_l;
+                a[l] = el_i;
             }
         }
     }
 }
 
 
-__global__ void sort_init(int *a, int n, int elems_block){
+__global__ void bitonicInit(int *a, int n, int elems_block){
 /*
     Performs multiple steps of bitonic sort until dependency between data remains within blocks. 
     In particular, it computes all the boxes up to k=elems_block. This is the last block with no external dependencies.
@@ -248,7 +273,7 @@ __global__ void sort_init(int *a, int n, int elems_block){
 }
 
 
-void bitonic(int *a, int n, int blocks, int threads){
+void bitonicSortPar(int *a, int n){
 /*
     Bitonic sort is a sorting algorithm with log_2(n) boxes each one containing 'i' steps,
     where 'i' is the index of the box.
@@ -284,13 +309,14 @@ void bitonic(int *a, int n, int blocks, int threads){
     // Copy the auxiliary array into the DEVICE 
     cudaMemcpy(d_aux, aux, size, cudaMemcpyHostToDevice);
     
+    int blocks = (m + double(MAX_SHARED_ELEMS) - 1) / double(MAX_SHARED_ELEMS);
     int elems_block = (m + blocks - 1) / blocks;    // Number of elements per block
     int k=2;
     int j;
 
     // Perform initial re-arranging of the array up to k=elems_block
     if(elems_block <= MAX_SHARED_ELEMS){
-        sort_init<<<blocks, threads>>>(d_aux, m, elems_block);
+        bitonicInit<<<blocks, 1024>>>(d_aux, m, elems_block);
         cudaDeviceSynchronize(); // Synch blocks
         k = elems_block;
     }
@@ -301,11 +327,11 @@ void bitonic(int *a, int n, int blocks, int threads){
         while(j > 0){
             if(elems_block < MAX_SHARED_ELEMS && 2*j <= elems_block){
                 // Dependencies between data on the same block only
-                sort_in_mem<<<blocks, threads>>>(d_aux, m, k, j, elems_block);
+                bitonicInMem<<<blocks, 1024>>>(d_aux, m, k, j, elems_block);
                 j=0;
             } else {
                 // Dependencies between data on different blocks
-                sort_out_mem<<<blocks, threads>>>(d_aux, m, k, j, elems_block);
+                bitonicOffMem<<<blocks, 1024>>>(d_aux, m, k, j, elems_block);
                 j/=2;
             }
         }
@@ -321,7 +347,6 @@ void bitonic(int *a, int n, int blocks, int threads){
     while(i < m){
         if(aux[i] != -1){
             a[j] = aux[i];
-            //printf("%d ", a[j]);
             j++;
         }
         i++;
@@ -330,53 +355,57 @@ void bitonic(int *a, int n, int blocks, int threads){
 }
 
 
-bool test(int *a, int *b, int n){
-    clock_t start, stop;
-    double time_seq, time_par, thr_seq, thr_par;
-
-    printf("\nnum elements: %d\n", n);
-    /* SEQUENTIAL BITONIC SORT */
-    start = clock();
-    bitonic_seq(a, n);
-    stop = clock();
-    time_seq = double(stop-start+1) / double(CLOCKS_PER_SEC);
-    thr_seq = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
-    
-    /* PARALLEL BITONIC SORT */
-    start = clock();
-    int blocks = int(floor((double)(n + (double)(MAX_SHARED_ELEMS) - 1) / (double)(MAX_SHARED_ELEMS)));
-    bitonic(b, n, blocks, 1024);
-    stop = clock();
-    time_par = double(stop-start+1) / double(CLOCKS_PER_SEC);
-    thr_par = double(n * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
-
-    printf("Sequential time:\t%lf seconds\t", time_seq);
-    printf("Throughput:\t%lf\n", thr_seq);
-    printf("  Parallel time:\t%lf seconds\t", time_par);
-    printf("Throughput:\t%lf\t(%d)\t", thr_par, blocks);
-    if(compare_arrays(a, b, n)){
-        printf("[OK]\n");
-        return true;
-    } else {
-        printf("[WRONG]\n");
-        return false;
-    }
-}
-
+// MAIN
 int main(){
 
     int *a, *b;
+    clock_t start, stop;
+    double timeS[REPETITIONS], timeP[REPETITIONS];
+    double thrS[REPETITIONS], thrP[REPETITIONS];
 
-    for(int length=1024; length < MAX_LENGTH; length*=2){
-        // Allocate memory for the array
-        a = (int *)malloc(length * sizeof(int));
-        b = (int *)malloc(length * sizeof(int));
+    for(int length=1024; length <= MAX_LENGTH; length*=2){
+        printf("N = %d\n", length);
+        for(int r=0; r < REPETITIONS; r++){
+            
+            // Allocate memory for the array
+            a = (int *)malloc(length * sizeof(int));
+            b = (int *)malloc(length * sizeof(int));
 
-        // Initialize random array
-        random_array(a, length);
-        copy_array(a, b, length);
+            // Initialize random array
+            randomArray(a, length);
+            copyArray(a, b, length);
 
-        test(a, b, length);
-        free(a); free(b);
+            if(length <= MAX_LENGTH_SEQ){
+                // SEQUENTIAL algorithm
+                start = clock();
+                bitonicSortSeq(a, length);
+                stop = clock();
+            }
+
+            timeS[r] = double(stop-start+1) / double(CLOCKS_PER_SEC);
+            thrS[r] = double(length * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
+
+            // PARALLEL algorithm
+            start = clock();
+            bitonicSortPar(b, length);
+            stop = clock();
+
+            timeP[r] = double(stop-start+1) / double(CLOCKS_PER_SEC);
+            thrP[r] = double(length * (double(CLOCKS_PER_SEC) / double(stop-start+1)));
+
+            // Check correctness
+            if((length <= MAX_LENGTH_SEQ && compareArrays(a, b, length) != true) ||
+                    length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true){
+                printf("\nERROR!!\n");
+            }
+
+            free(a); free(b);
+        }
+        if(length <= MAX_LENGTH_SEQ){
+            printf("SEQ\n");
+            printResults(timeS, thrS, REPETITIONS);
+        }
+        printf("PAR\n");
+        printResults(timeP, thrP, REPETITIONS);
     }
 }
