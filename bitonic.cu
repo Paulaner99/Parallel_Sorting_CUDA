@@ -57,11 +57,11 @@ bool everIncreasing(int *a, int n){
 
 void printResults(double *time, double *thr, int n){
     for(int r=0; r < n; r++){
-        printf("%.4f    ", time[r]);
+        printf("%.4f,    ", time[r]);
     }
     printf("(s)\n");
     for(int r=0; r < n; r++){
-        printf("%.0f    ", thr[r]);
+        printf("%.0f,    ", thr[r]);
     }
     printf("(el/s)\n\n");
 }
@@ -364,6 +364,8 @@ int main(){
     double thrS[REPETITIONS], thrP[REPETITIONS];
 
     for(int length=1024; length <= MAX_LENGTH; length*=2){
+        printf("\n\n############################################");
+        printf("############################################\n\n");
         printf("N = %d\n", length);
         for(int r=0; r < REPETITIONS; r++){
             
