@@ -4,7 +4,7 @@
 
 #define MAX_SHARED_ELEMS 12*1024
 #define MAX_LENGTH 32*1024*1024
-#define MAX_LENGTH_SEQ 1*1024*1024
+#define MAX_LENGTH_SEQ 32*1024*1024
 #define REPETITIONS 5
 
 
@@ -168,11 +168,8 @@ __global__ void mergeInMem(int *a, int n, int blocks){
 
 
 __global__ void mergeOffMem(int *a, int *aux, int n, int size, int blocks){
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int threads = blocks * blockDim.x;
-    int elems_block = (n + blocks - 1) / blocks;
-    // Block offset
-    int off = blockIdx.x * elems_block;
+    int elems_block = (n + blocks - 1) / blocks;    // Elements per block
+    int off = blockIdx.x * elems_block;             // Block offset
 
     for(int j=threadIdx.x; (j < elems_block) && (j + off < n); j+=blockDim.x){
         int i = j + off;
