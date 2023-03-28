@@ -3,7 +3,7 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 8*1024
-#define MAX_LENGTH 1024*1024*1024
+#define MAX_LENGTH 512*1024*1024
 #define MAX_LENGTH_SEQ 1*1024*1024
 #define REPETITIONS 5
 
