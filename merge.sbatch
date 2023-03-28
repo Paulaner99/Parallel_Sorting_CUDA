@@ -5,7 +5,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --output=outputMerge_
+#SBATCH --output=outputMerge
 #SBATCH --gres=gpu:1
 
 nvcc merge.cu -o merge.out
