@@ -3,8 +3,8 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 8*1024
-#define MAX_LENGTH 32*1024*1024
-#define MAX_LENGTH_SEQ 32*1024*1024
+#define MAX_LENGTH 1024*1024*1024
+#define MAX_LENGTH_SEQ 1*1024*1024
 #define REPETITIONS 5
 
 
@@ -20,6 +20,9 @@ void randomArray(int *a, int n){
 
 
 void copyArray(int *a, int *b, int n){
+/*
+    Copy elements from one array to another.
+*/
     for(int i=0; i < n; i++){
         b[i] = a[i];
     }
@@ -27,6 +30,9 @@ void copyArray(int *a, int *b, int n){
 
 
 bool compareArrays(int *a, int *b, int n){
+/*
+    Compare the elements of two arrays.
+*/
     for(int i=0; i < n; i++){
         if(a[i] != b[i]){
             return false;
@@ -37,6 +43,9 @@ bool compareArrays(int *a, int *b, int n){
 
 
 void compareAndSwap(int *a, int i, int j, int dir){
+/*
+    Compare and swap two elements of an array, according to the direction of the ordering.
+*/
     if(dir == (a[i] > a[j])){
         int tmp = a[i];
         a[i] = a[j];
@@ -46,6 +55,9 @@ void compareAndSwap(int *a, int i, int j, int dir){
 
 
 bool everIncreasing(int *a, int n){
+/*
+    Check wheter the array is monotonically increasing.
+*/
     for(int i=1; i < n; i++){
         if(a[i] < a[i-1]){
             return false;
@@ -128,6 +140,60 @@ void bitonicSortSeq(int *a, int n){
 
 
 // PARALLEL VERSION
+__global__ void bitonicInit(int *a, int n, int elems_block){
+/*
+    Performs multiple steps of bitonic sort until dependency between data remains within blocks. 
+    In particular, it computes all the boxes up to k=elems_block. This is the last block with no external dependencies.
+
+    In these kernel all the computations are performed using the shared memory.
+*/    
+    
+    // Block offset
+    int off = blockIdx.x * elems_block;
+
+    // Shared memory
+    __shared__ int v[MAX_SHARED_ELEMS];
+
+    // Fill shared memory: each block loads the values in a local vector 'v'
+    for(int i=threadIdx.x; (i < elems_block) && (i + off < n); i+=blockDim.x){
+        v[i] = a[i+off];
+    }
+    __syncthreads();
+    
+    // Bitonic sort up to step k=elems_block
+    for(int k=2; k <= elems_block; k*=2){
+        for(int j=k/2; j > 0; j/=2){
+            // One step of bitonic sort
+            int l, i, tmp;
+
+            // Each thread evaluates comparisons and swaps until all elements are re-ordered. 
+            // (according to the pattern required at step (k, j))
+            for(int idx=threadIdx.x; (idx < elems_block) && (idx + off < n); idx+=blockDim.x){
+                i = idx + off;
+                l = i ^ j;
+                if(l > i){
+                    // COMPARE
+                    if((i & k) == 0 && (v[idx] > v[l-off]) || (i & k) != 0 && (v[idx] < v[l-off])){
+                        // SWAP
+                        tmp = v[idx];
+                        v[idx] = v[l-off];
+                        v[l-off] = tmp;
+                    }
+                }
+            }
+            // Wait until the shared vector is completely rearranged before proceeding to the next step.
+            // It is not necessary to synch at block level given that the following operations are local.
+            __syncthreads();
+        }
+    }
+    
+    // Write back the data from shared to global memory
+    for(int i=threadIdx.x; (i < elems_block) && (i + off < n); i+=blockDim.x){
+        a[i+off] = v[i];
+    }    
+}
+
+
 __global__ void bitonicInMem(int *a, int n, int k, int j, int elems_block){
 /*
     Performs multiple steps of bitonic sort within the same box 'k'. 
@@ -136,7 +202,7 @@ __global__ void bitonicInMem(int *a, int n, int k, int j, int elems_block){
     The value of 'j' represents the 'distance' between elements to be compared (and eventually swapped).
         -> 2*j is the number of elements on which the following steps within the 'k' box depend!
 
-    In these function all the computations are performed using the shared memory.
+    In these kernel all the computations are performed using the shared memory.
 */    
 
     // Block offset
@@ -190,7 +256,7 @@ __global__ void bitonicOffMem(int *a, int n, int k, int j, int elems_block){
     Performs one step of bitonic sort. 
     In particular, it computes step (k, j).
 
-    In these function all the computations are performed using the global memory.
+    In these kernel all the computations are performed using the global memory.
 */ 
 
     // Block offset
@@ -219,67 +285,13 @@ __global__ void bitonicOffMem(int *a, int n, int k, int j, int elems_block){
 }
 
 
-__global__ void bitonicInit(int *a, int n, int elems_block){
-/*
-    Performs multiple steps of bitonic sort until dependency between data remains within blocks. 
-    In particular, it computes all the boxes up to k=elems_block. This is the last block with no external dependencies.
-
-    In these function all the computations are performed using the shared memory.
-*/    
-    
-    // Block offset
-    int off = blockIdx.x * elems_block;
-
-    // Shared memory
-    __shared__ int v[MAX_SHARED_ELEMS];
-
-    // Fill shared memory: each block loads the values in a local vector 'v'
-    for(int i=threadIdx.x; (i < elems_block) && (i + off < n); i+=blockDim.x){
-        v[i] = a[i+off];
-    }
-    __syncthreads();
-    
-    // Bitonic sort up to step k=elems_block
-    for(int k=2; k <= elems_block; k*=2){
-        for(int j=k/2; j > 0; j/=2){
-            // One step of bitonic sort
-            int l, i, tmp;
-
-            // Each thread evaluates comparisons and swaps until all elements are re-ordered. 
-            // (according to the pattern required at step (k, j))
-            for(int idx=threadIdx.x; (idx < elems_block) && (idx + off < n); idx+=blockDim.x){
-                i = idx + off;
-                l = i ^ j;
-                if(l > i){
-                    // COMPARE
-                    if((i & k) == 0 && (v[idx] > v[l-off]) || (i & k) != 0 && (v[idx] < v[l-off])){
-                        // SWAP
-                        tmp = v[idx];
-                        v[idx] = v[l-off];
-                        v[l-off] = tmp;
-                    }
-                }
-            }
-            // Wait until the shared vector is completely rearranged before proceeding to the next step.
-            // It is not necessary to synch at block level given that the following operations are local.
-            __syncthreads();
-        }
-    }
-    
-    // Write back the data from shared to global memory
-    for(int i=threadIdx.x; (i < elems_block) && (i + off < n); i+=blockDim.x){
-        a[i+off] = v[i];
-    }    
-}
-
-
 void bitonicSortPar(int *a, int n){
 /*
-    Bitonic sort is a sorting algorithm with log_2(n) boxes each one containing 'i' steps,
+    Bitonic sort is a sorting algorithm with log_2(n) steps each one containing 'i' stages,
     where 'i' is the index of the box.
     
     Advantages:
-        - All the computations in the same step can be done in parallel.
+        - All the computations in the same stage can be done in parallel.
         - The workload across threads is balanced, as operations involve only comparisons and swaps.
             -> No huge delays when threads are synchronized
         - Parallel time complexity: θ( (n/p) * log(n)^2 )
@@ -309,6 +321,7 @@ void bitonicSortPar(int *a, int n){
     // Copy the auxiliary array into the DEVICE 
     cudaMemcpy(d_aux, aux, size, cudaMemcpyHostToDevice);
     
+    // Use the number of blocks that maximize the utilization of shared memory
     int blocks = (m + double(MAX_SHARED_ELEMS) - 1) / double(MAX_SHARED_ELEMS);
     int elems_block = (m + blocks - 1) / blocks;    // Number of elements per block
     int k=2;
@@ -366,7 +379,7 @@ int main(){
     for(int length=1024; length <= MAX_LENGTH; length*=2){
         printf("\n\n############################################");
         printf("############################################\n\n");
-        printf("N = %d\n", length);
+        printf("N = %d\n\n", length);
         for(int r=0; r < REPETITIONS; r++){
             
             // Allocate memory for the array
@@ -397,7 +410,7 @@ int main(){
 
             // Check correctness
             if((length <= MAX_LENGTH_SEQ && compareArrays(a, b, length) != true) ||
-                    length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true){
+                    (length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true)){
                 printf("\nERROR!!\n");
             }
 

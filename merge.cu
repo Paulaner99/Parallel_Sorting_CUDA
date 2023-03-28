@@ -3,8 +3,8 @@
 #include <time.h>
 
 #define MAX_SHARED_ELEMS 12*1024
-#define MAX_LENGTH 32*1024*1024
-#define MAX_LENGTH_SEQ 32*1024*1024
+#define MAX_LENGTH 512*1024*1024
+#define MAX_LENGTH_SEQ 1*1024*1024
 #define REPETITIONS 5
 
 
@@ -15,12 +15,14 @@ void randomArray(int *a, int n){
 */
     for(int i=0; i < n; i++){
         a[i] = rand();
-		//printf("%d ", a[i]);
     }
 }
 
 
 void copyArray(int *a, int *b, int n){
+/*
+    Copy elements from one array to another.
+*/
     for(int i=0; i < n; i++){
         b[i] = a[i];
     }
@@ -28,6 +30,9 @@ void copyArray(int *a, int *b, int n){
 
 
 __global__ void copyArrayDevice(int *dst, int *src, int n, int blocks){
+/*
+    Copy elements from one array in the DEVICE memory into another one in the DEVICE memory.
+*/
     int threads = blocks * blockDim.x;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     for(int i=idx; i < n; i+=threads){
@@ -37,6 +42,9 @@ __global__ void copyArrayDevice(int *dst, int *src, int n, int blocks){
 
 
 bool compareArrays(int *a, int *b, int n){
+/*
+    Compare the elements of two arrays.
+*/
     for(int i=0; i < n; i++){
         if(a[i] != b[i]){
             return false;
@@ -47,6 +55,9 @@ bool compareArrays(int *a, int *b, int n){
 
 
 bool everIncreasing(int *a, int n){
+/*
+    Check wheter the array is monotonically increasing.
+*/
     for(int i=1; i < n; i++){
         if(a[i] < a[i-1]){
             return false;
@@ -69,6 +80,9 @@ void printResults(double *time, double *thr, int n){
 
 
 __host__ __device__ int binarySearchCount(int val, int *a, int first, int last, int ord){
+/*
+    Count the number of elements that are smaller than 'val' (also equal if 'ord' is 1).
+*/
     int left = first;
     int right = last;
     int mid;
@@ -105,12 +119,19 @@ __host__ __device__ int binarySearchCount(int val, int *a, int first, int last, 
 // SEQUENTIAL VERSION
 void mergeSortSeq(int *a, int n){
     int *aux = (int *)malloc(n * sizeof(int));
+    int ord, before, first, last;
+
+    // Sub-arrays
     for(int size=1; size < n; size*=2){
+
+        // Element sorting
         for(int i=0; i < n; i++){
-            int before = i%size + (i/(2*size)) * 2 * size;
-            int ord = (i/size) % 2;
-            int first = (i/size + 1 - 2*ord) * size;
-            int last = min(first + size, n);
+            ord = (i/size) % 2;                             // Indicates if first or second array of the pair
+            before = i%size + (i/(2*size)) * 2 * size;      // N° of elements before the current pair of sub-arrays
+            first = (i/size + 1 - 2*ord) * size;            // Index of the first element of the sub-array used for binary search
+            last = min(first + size, n);                    // Index of the last element of the sub-array used for binary search
+
+            // Copy the elements in the right position
             if(last > first){
                 int idx = binarySearchCount(a[i], a, first, last, ord);
                 aux[idx + before] = a[i];
@@ -118,6 +139,7 @@ void mergeSortSeq(int *a, int n){
                 aux[before] = a[i];
             }
         }
+        // Move the values back from the auxiliary array into the original array
         copyArray(aux, a, n);
     }
 }
@@ -125,10 +147,14 @@ void mergeSortSeq(int *a, int n){
 
 // PARALLEL VERSION
 __global__ void mergeInMem(int *a, int n, int blocks){
-    int elems_block = (n + blocks - 1) / blocks; 
-    
-    // Block offset
-    int off = blockIdx.x * elems_block;
+/*
+    Performs multiple steps of merge sort, until data does not fit the shared memory anymore.
+
+    In these kernel all the computations are performed using the shared memory.
+*/ 
+
+    int elems_block = (n + blocks - 1) / blocks;    // Elements per block
+    int off = blockIdx.x * elems_block;             // Block offset
 
     // Shared memory
     __shared__ int v[MAX_SHARED_ELEMS/2];
@@ -139,14 +165,17 @@ __global__ void mergeInMem(int *a, int n, int blocks){
         v[i] = a[i+off];
     }
 
+    int ord, before, first, last;
     for(int size=1; size < elems_block; size*=2){
         __syncthreads();
         for(int i=threadIdx.x; i < elems_block && i + off < n; i+=blockDim.x){
-            int before = i%size + (i/(2*size)) * 2 * size;
-            int ord = (i/size) % 2;
-            int first = (i/size + 1 - 2*ord) * size;
-            int last = min(first + size, elems_block);
-            last = min(last, n - off);
+            ord = (i/size) % 2;                             // Indicates if first or second array of the pair
+            before = i%size + (i/(2*size)) * 2 * size;      // N° of elements before the current pair of sub-arrays 
+            first = (i/size + 1 - 2*ord) * size;            // Index of the first element of the sub-array used for binary search
+            last = min(first + size, elems_block);          
+            last = min(last, n - off);                      // Index of the last element of the sub-array used for binary search
+            
+            // Copy the elements in the right position
             if(last > first){
                 int idx = binarySearchCount(v[i], v, first, last, ord);
                 aux[idx + before] = v[i]; 
@@ -156,11 +185,13 @@ __global__ void mergeInMem(int *a, int n, int blocks){
             
         }
         __syncthreads();
+        // Move the values back from the auxiliary array into the original array
         for(int i=threadIdx.x; i < elems_block && i + off < n; i+=blockDim.x){
             v[i] = aux[i]; 
         }
     }
 
+    // Write back the data from shared to global memory
     for(int i=threadIdx.x; (i < elems_block) && (i + off < n); i+=blockDim.x){
         a[i+off] = v[i];
     }
@@ -168,15 +199,24 @@ __global__ void mergeInMem(int *a, int n, int blocks){
 
 
 __global__ void mergeOffMem(int *a, int *aux, int n, int size, int blocks){
+/*
+    Performs one step of merge sort. 
+    In particular, it computes the step in which the sub-arrays have a numer of elements equal to 'size'.
+
+    In these kernel all the computations are performed using the global memory.
+*/ 
     int elems_block = (n + blocks - 1) / blocks;    // Elements per block
     int off = blockIdx.x * elems_block;             // Block offset
 
+    int i, ord, before, first, last; 
     for(int j=threadIdx.x; (j < elems_block) && (j + off < n); j+=blockDim.x){
-        int i = j + off;
-        int before = i%size + (i/(2*size)) * 2 * size;
-        int ord = (i/size) % 2;
-        int first = (i/size + 1 - 2*ord) * size;
-        int last = min(first + size, n);
+        i = j + off;
+        ord = (i/size) % 2;                             // Indicates if first or second array of the pair
+        before = i%size + (i/(2*size)) * 2 * size;      // N° of elements before the current pair of sub-arrays
+        first = (i/size + 1 - 2*ord) * size;            // Index of the first element of the sub-array used for binary search
+        last = min(first + size, n);                    // Index of the last element of the sub-array used for binary search
+        
+        // Copy the elements in the right position
         if(last > first){
             int idx = binarySearchCount(a[i], a, first, last, ord);
             aux[idx + before] = a[i];
@@ -189,6 +229,15 @@ __global__ void mergeOffMem(int *a, int *aux, int n, int size, int blocks){
 
 void mergeSortPar(int *a, int n){
 /*
+    Merge sort is a sorting algorithm with log_2(n) merging steps.
+    
+    Advantages:
+        - The sequential version is already very efficient.
+        - Parallel time complexity: θ( (n/p) * log(n) )
+
+    Disadvantages:
+        - The original merge function is not good for parallel implementations (here binary search is used).
+        - Not in-place (requires an auxiliary array -> doubles the memory requirements)
 */
 
     int *d_a, *d_aux;
@@ -200,6 +249,7 @@ void mergeSortPar(int *a, int n){
     // Copy the auxiliary array into the DEVICE 
     cudaMemcpy(d_a, a, size, cudaMemcpyHostToDevice);
     
+    // Use the number of blocks that maximize the utilization of shared memory
     int blocks = (n + double(MAX_SHARED_ELEMS/2) - 1) / double(MAX_SHARED_ELEMS/2);
     int threads = 1024;
     int elems_block = (n + blocks - 1) / blocks;
@@ -237,7 +287,7 @@ int main(){
     for(int length=1024; length <= MAX_LENGTH; length*=2){
         printf("\n\n############################################");
         printf("############################################\n\n");
-        printf("N = %d\n", length);
+        printf("N = %d\n\n", length);
         for(int r=0; r < REPETITIONS; r++){
             
             // Allocate memory for the array
@@ -268,7 +318,7 @@ int main(){
 
             // Check correctness
             if((length <= MAX_LENGTH_SEQ && compareArrays(a, b, length) != true) ||
-                    length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true){
+                    (length > MAX_LENGTH_SEQ && everIncreasing(b, length) != true)){
                 printf("\nERROR!!\n");
             }
 
@@ -282,24 +332,3 @@ int main(){
         printResults(timeP, thrP, REPETITIONS);
     }
 }
-
-
-/*
-__global__ void mergeOffMem(int *a, int *aux, int n, int size, int blocks){
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int threads = blocks * blockDim.x;
-
-    for(int i=idx; i < n; i+=threads){
-        int before = i%size + (i/(2*size)) * 2 * size;
-        int ord = (i/size) % 2;
-        int first = (i/size + 1 - 2*ord) * size;
-        int last = min(first + size, n);
-        if(last > first){
-            int idx = binarySearchCount(a[i], a, first, last, ord);
-            aux[idx + before] = a[i];
-        } else {
-            aux[before] = a[i];
-        }
-    }
-}
-*/
