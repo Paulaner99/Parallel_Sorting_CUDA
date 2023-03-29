@@ -1,2 +1,2 @@
 # Parallel_Sorting_CUDA
-Parallelizing some of the most famous sorting algorithms using CUDA C.
+In this project two sorting algorithms, Bitonic and Merge sort, have been re-implemented in their parallel versions using the CUDA exten- sion for the C programming language.
