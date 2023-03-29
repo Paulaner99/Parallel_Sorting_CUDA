@@ -67,6 +67,14 @@ bool everIncreasing(int *a, int n){
 }
 
 
+void printBitonic(){
+    printf("\n\n\n\n");
+    printf("########################################################################################\n");
+    printf("##################################### BITONIC SORT #####################################\n");
+    printf("########################################################################################");
+}
+
+
 void printResults(double *time, double *thr, int n){
     for(int r=0; r < n; r++){
         printf("%.4f,    ", time[r]);
@@ -376,6 +384,7 @@ int main(){
     double timeS[REPETITIONS], timeP[REPETITIONS];
     double thrS[REPETITIONS], thrP[REPETITIONS];
 
+    printBitonic();
     for(int length=1024; length <= MAX_LENGTH; length*=2){
         printf("\n\n############################################");
         printf("############################################\n\n");
