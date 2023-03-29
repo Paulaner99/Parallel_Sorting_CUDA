@@ -28,6 +28,6 @@ nvcc merge.cu -o merge.out
 ```
 
 ## Time & Throughput comparison (CUDA vs CPU)
-<img src="resources/time.png" width="50%"> <img src="resources/throughput.png" width="44.5%"/> 
+<img src="resources/time.png" width="50%"> <img src="resources/throughput.png" width="44.4%"/> 
 
 
