@@ -1,5 +1,5 @@
 # Parallel_Sorting_CUDA
-In this project two sorting algorithms, Bitonic and Merge sort, have been re-implemented in their parallel versions using the CUDA exten- sion for the C programming language.
+In this project two sorting algorithms, Bitonic and Merge sort, have been re-implemented in their parallel versions using the CUDA extension for the C programming language.
 
 ## Run commands (Windows)
 Compile and execute bitonic sort:
